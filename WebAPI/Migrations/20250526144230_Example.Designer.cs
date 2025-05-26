@@ -12,7 +12,7 @@ using WebAPI.Context;
 namespace WebAPI.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20250525160442_Example")]
+    [Migration("20250526144230_Example")]
     partial class Example
     {
         /// <inheritdoc />
