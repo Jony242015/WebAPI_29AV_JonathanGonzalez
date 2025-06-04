@@ -1,92 +1,113 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿// Importación de librerías necesarias para autenticación, seguridad, base de datos y documentación
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 using System.Text;
-using WebAPI.Context;               // Contexto de base de datos
-using WebAPI.Services.IServices;   // Interfaces de servicios
-using WebAPI.Services.Services;    // Implementación de servicios
+using WebAPI.Context;
+using WebAPI.Services.IServices;
+using WebAPI.Services.Services;
 
-// Crear el constructor de la aplicación web
 var builder = WebApplication.CreateBuilder(args);
 
-// Agregar servicios de controladores para manejar peticiones HTTP
-builder.Services.AddControllers();
+// ?? Clave secreta para la generación y validación de tokens JWT
+// Si no se encuentra en la configuración, se usa una clave por defecto
+var key = builder.Configuration["Jwt:Key"] ?? "clave_super_secreta_1234567890_ABCDEF";
 
-// Configurar Swagger/OpenAPI para generar documentación y facilitar pruebas de la API
-builder.Services.AddEndpointsApiExplorer(); // Habilita exploración de endpoints
-builder.Services.AddSwaggerGen();           // Genera la documentación Swagger
-
-// Configurar DbContext con SQL Server, usando la cadena de conexión definida en appsettings.json
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"))
-);
-
-// Registrar servicios para inyección de dependencias con ciclo de vida Scoped
-// Scoped es recomendable para servicios que usan DbContext
-builder.Services.AddScoped<IUserServices, UserServices>();
-builder.Services.AddScoped<IRolServices, RolServices>();
-
-// Configurar CORS (Cross-Origin Resource Sharing) para permitir solicitudes desde cualquier origen
-// Opcional, útil si la API será consumida desde frontend en otros dominios
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowAll", policy =>
-    {
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod();
-    });
-});
-
-// Configuración de autenticación JWT para proteger la API
-// La clave y otros valores se leen desde appsettings.json
-var key = Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]);
-
+// ? Configuración de la autenticación utilizando JWT (JSON Web Token)
 builder.Services.AddAuthentication(options =>
 {
-    // Configura JWT como esquema de autenticación predeterminado
+    // Especifica que se utilizará JWT para autenticar y desafiar
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
     options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
 })
-.AddJwtBearer(options =>
+.AddJwtBearer(opt =>
 {
-    // Parámetros para validar el token JWT
-    options.TokenValidationParameters = new TokenValidationParameters
-    {
-        ValidateIssuer = true,                 // Valida el emisor del token
-        ValidateAudience = true,               // Valida el destinatario del token
-        ValidateLifetime = true,               // Valida que el token no haya expirado
-        ValidateIssuerSigningKey = true,       // Valida la firma digital del token
-        ValidIssuer = builder.Configuration["Jwt:Issuer"],     // Emisor válido
-        ValidAudience = builder.Configuration["Jwt:Audience"], // Audiencia válida
-        IssuerSigningKey = new SymmetricSecurityKey(key),      // Clave secreta para validar firma
+    // Desactiva la necesidad de HTTPS para los tokens (solo útil en desarrollo)
+    opt.RequireHttpsMetadata = false;
 
-        // Define el claim que se usará para el control de roles en autorización
-        RoleClaimType = System.Security.Claims.ClaimTypes.Role
+    // Guarda el token en el contexto de la autenticación
+    opt.SaveToken = true;
+
+    // Parámetros de validación del token JWT
+    opt.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = false, // No se valida el emisor del token
+        ValidateAudience = false, // No se valida el receptor del token
+        ValidateLifetime = true, // Se valida la vigencia del token
+        ValidateIssuerSigningKey = true, // Se valida la firma del token
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)) // Clave para validar la firma
     };
 });
 
-// Construcción de la aplicación web
+// ? Agrega servicios de autorización
+builder.Services.AddAuthorization();
+
+// ? Configuración de Swagger para documentar la API y permitir pruebas con JWT
+builder.Services.AddSwaggerGen(c =>
+{
+    // Información básica del documento Swagger
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "WebApi29AV", Version = "v1" });
+
+    // Definición de seguridad para JWT
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization", // Nombre del encabezado
+        Type = SecuritySchemeType.Http, // Tipo de seguridad
+        Scheme = "Bearer", // Esquema Bearer
+        BearerFormat = "JWT", // Formato JWT
+        In = ParameterLocation.Header, // Ubicación del token
+        Description = "Introduce tu token JWT en este formato: **Bearer {token}**"
+    });
+
+    // Requisito de seguridad para que Swagger lo use en las peticiones
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>() // No se especifican scopes
+        }
+    });
+});
+
+// ? Agrega servicios de controladores
+builder.Services.AddControllers();
+
+// ? Habilita la exploración de endpoints para Swagger
+builder.Services.AddEndpointsApiExplorer();
+
+// ? Configura el contexto de base de datos con SQL Server
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ? Registro de servicios personalizados en el contenedor de dependencias
+builder.Services.AddTransient<IUserServices, UserServices>(); // Servicio de usuarios
+builder.Services.AddTransient<IRolServices, RolServices>();   // Servicio de roles
+
+// ? Construye la aplicación
 var app = builder.Build();
 
-// Middleware para manejar peticiones HTTP
-
-// Habilitar Swagger solo en entorno de desarrollo para facilitar pruebas
+// ? Middleware de desarrollo: activa Swagger si el entorno es de desarrollo
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();       // Activa Swagger JSON
-    app.UseSwaggerUI();     // Activa la interfaz visual de Swagger
+    app.UseSwagger();      // Genera documentación JSON de la API
+    app.UseSwaggerUI();    // Interfaz gráfica para probar endpoints
 }
 
-app.UseHttpsRedirection(); // Redirecciona peticiones HTTP a HTTPS
+app.UseHttpsRedirection();   // Redirección automática de HTTP a HTTPS
 
-app.UseCors("AllowAll");   // Aplicar política CORS para permitir cualquier origen
+app.UseAuthentication();     // Habilita el middleware de autenticación (¡debe ir antes de Authorization!)
+app.UseAuthorization();      // Habilita la autorización para los endpoints
 
-app.UseAuthentication();   // Habilitar autenticación con JWT
-app.UseAuthorization();    // Habilitar autorización basada en roles y políticas
+app.MapControllers();        // Mapea los controladores a las rutas configuradas
 
-app.MapControllers();      // Mapea las rutas a los controladores
-
-app.Run();                 // Ejecuta la aplicación web
+app.Run();                   // Ejecuta la aplicación
 
 // Autor: Gonzalez Madrigal Jonathan Arturo - Grupo: 29AV

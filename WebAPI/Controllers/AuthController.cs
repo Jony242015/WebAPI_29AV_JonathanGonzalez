@@ -1,67 +1,62 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Domain.DTO;
+using Domain.Entities;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
-using Domain.Entities;
 using WebAPI.Context;
-using Microsoft.EntityFrameworkCore;
 
-namespace WebAPI.Controllers
+namespace WebApi29AV.Controllers
 {
-    [Route("api/[controller]")]
     [ApiController]
+    [Route("api/[controller]")]
     public class AuthController : ControllerBase
     {
+        private readonly IConfiguration _config;
         private readonly ApplicationDbContext _context;
-        private readonly IConfiguration _configuration;
 
-        public AuthController(ApplicationDbContext context, IConfiguration configuration)
+        public AuthController(IConfiguration config, ApplicationDbContext context)
         {
+            _config = config;
             _context = context;
-            _configuration = configuration;
-        }
-
-        public class LoginRequest
-        {
-            public string UserName { get; set; }
-            public string Password { get; set; }
         }
 
         [HttpPost("login")]
-        public async Task<IActionResult> Login([FromBody] LoginRequest request)
+        public IActionResult Login([FromBody] LoginRequest request)
         {
-            var user = await _context.Users
-                .Include(u => u.Roles)
-                .FirstOrDefaultAsync(u => u.Username == request.UserName && u.Password == request.Password);
+            var user = _context.Users.FirstOrDefault(u =>
+                u.Username == request.UserName && u.Password == request.Password);
 
             if (user == null)
-                return Unauthorized(new { message = "Credenciales inválidas" });
+            {
+                var errorResponse = new Response<string>("Credenciales inválidas");
+                return Unauthorized(errorResponse);
+            }
 
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var key = Encoding.UTF8.GetBytes(_config["Jwt:Key"]);
             var claims = new[]
             {
                 new Claim(ClaimTypes.Name, user.Username),
-                new Claim("PKUser", user.PKUser.ToString()),
-                new Claim(ClaimTypes.Role, user.Roles?.Name ?? "User") // Aquí se envía el nombre del rol
+                new Claim(ClaimTypes.NameIdentifier, user.PKUser.ToString()),
+                new Claim(ClaimTypes.Role, user.FKRol?.ToString() ?? "")
             };
 
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]));
-            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-
-            var token = new JwtSecurityToken(
-                issuer: _configuration["Jwt:Issuer"],
-                audience: _configuration["Jwt:Audience"],
-                claims: claims,
-                expires: DateTime.UtcNow.AddHours(2),
-                signingCredentials: creds
-            );
-
-            return Ok(new
+            var tokenDescriptor = new SecurityTokenDescriptor
             {
-                token = new JwtSecurityTokenHandler().WriteToken(token),
-                user = new { user.PKUser, user.Username, user.Name, user.FKRol }
-            });
+                Subject = new ClaimsIdentity(claims),
+                Expires = DateTime.UtcNow.AddHours(1),
+                SigningCredentials = new SigningCredentials(
+                    new SymmetricSecurityKey(key),
+                    SecurityAlgorithms.HmacSha256Signature)
+            };
+
+            var token = tokenHandler.CreateToken(tokenDescriptor);
+            var tokenString = tokenHandler.WriteToken(token);
+
+            var successResponse = new Response<string>(tokenString, "Login exitoso");
+            return Ok(successResponse);
         }
     }
 }
-
